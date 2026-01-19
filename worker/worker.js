@@ -288,6 +288,30 @@ export default {
       }
 
       // ─────────────────────────────────────────────────────────────────────
+      // CHANGE PASSWORD
+      // ─────────────────────────────────────────────────────────────────────
+
+      if (path === '/api/auth/change-password' && request.method === 'POST') {
+        const { currentPassword, newPassword } = await request.json();
+        
+        if (!newPassword || newPassword.length < 6) {
+          return new Response(JSON.stringify({ success: false, error: 'Password must be at least 6 characters' }), { status: 400, headers: CORS });
+        }
+
+        const userData = await env.DATA.get(`user:${currentUser.email}`);
+        const user = JSON.parse(userData);
+        
+        if (user.password !== await hashPassword(currentPassword)) {
+          return new Response(JSON.stringify({ success: false, error: 'Current password is incorrect' }), { status: 400, headers: CORS });
+        }
+
+        user.password = await hashPassword(newPassword);
+        await env.DATA.put(`user:${currentUser.email}`, JSON.stringify(user));
+
+        return new Response(JSON.stringify({ success: true }), { headers: CORS });
+      }
+
+      // ─────────────────────────────────────────────────────────────────────
       // USERS (Admin only)
       // ─────────────────────────────────────────────────────────────────────
 
@@ -299,6 +323,64 @@ export default {
         return new Response(JSON.stringify({ success: true, users }), { headers: CORS });
       }
 
+      if (path === '/api/users' && request.method === 'POST') {
+        if (currentUser.role !== 'admin') {
+          return new Response(JSON.stringify({ success: false, error: 'Admin only' }), { status: 403, headers: CORS });
+        }
+        
+        const { name, email, password, role } = await request.json();
+        
+        if (!name || !email || !password) {
+          return new Response(JSON.stringify({ success: false, error: 'Missing required fields' }), { status: 400, headers: CORS });
+        }
+        
+        const existing = await env.DATA.get(`user:${email.toLowerCase()}`);
+        if (existing) {
+          return new Response(JSON.stringify({ success: false, error: 'Email already exists' }), { status: 400, headers: CORS });
+        }
+
+        const newUser = {
+          id: crypto.randomUUID(),
+          name: name.trim(),
+          email: email.toLowerCase().trim(),
+          password: await hashPassword(password),
+          role: role || 'moderator',
+          createdAt: Date.now()
+        };
+
+        await env.DATA.put(`user:${newUser.email}`, JSON.stringify(newUser));
+
+        const usersList = JSON.parse(await env.DATA.get('users:list') || '[]');
+        usersList.push({ id: newUser.id, email: newUser.email, name: newUser.name, role: newUser.role, createdAt: newUser.createdAt });
+        await env.DATA.put('users:list', JSON.stringify(usersList));
+
+        return new Response(JSON.stringify({ success: true, user: { ...newUser, password: undefined } }), { headers: CORS });
+      }
+
+      if (path.startsWith('/api/users/') && request.method === 'DELETE') {
+        if (currentUser.role !== 'admin') {
+          return new Response(JSON.stringify({ success: false, error: 'Admin only' }), { status: 403, headers: CORS });
+        }
+        
+        const userId = path.split('/')[3];
+        
+        // Can't delete yourself
+        if (userId === currentUser.id) {
+          return new Response(JSON.stringify({ success: false, error: 'Cannot delete yourself' }), { status: 400, headers: CORS });
+        }
+
+        let usersList = JSON.parse(await env.DATA.get('users:list') || '[]');
+        const userToDelete = usersList.find(u => u.id === userId);
+        
+        if (userToDelete) {
+          await env.DATA.delete(`user:${userToDelete.email}`);
+          usersList = usersList.filter(u => u.id !== userId);
+          await env.DATA.put('users:list', JSON.stringify(usersList));
+        }
+
+        return new Response(JSON.stringify({ success: true }), { headers: CORS });
+      }
+
       // ─────────────────────────────────────────────────────────────────────
       // CONFIG (Admin only)
       // ─────────────────────────────────────────────────────────────────────
@@ -308,17 +390,14 @@ export default {
           return new Response(JSON.stringify({ success: false, error: 'Admin only' }), { status: 403, headers: CORS });
         }
         const serverConfig = JSON.parse(await env.DATA.get('config:server') || 'null');
-        const smtpConfig = JSON.parse(await env.DATA.get('config:smtp') || 'null');
+        const emailConfig = JSON.parse(await env.DATA.get('config:email') || '{"fromAddress":""}');
         
         // Don't expose full secrets - mask them
         if (serverConfig?.apiSecret) {
           serverConfig.apiSecret = '••••••••' + serverConfig.apiSecret.slice(-4);
         }
-        if (smtpConfig?.password) {
-          smtpConfig.password = '••••••••';
-        }
         
-        return new Response(JSON.stringify({ success: true, serverConfig, smtpConfig }), { headers: CORS });
+        return new Response(JSON.stringify({ success: true, serverConfig, emailConfig }), { headers: CORS });
       }
 
       if (path === '/api/config/server' && request.method === 'POST') {
@@ -350,6 +429,15 @@ export default {
         }
         
         await env.DATA.put('config:smtp', JSON.stringify(config));
+        return new Response(JSON.stringify({ success: true }), { headers: CORS });
+      }
+
+      if (path === '/api/config/email' && request.method === 'POST') {
+        if (currentUser.role !== 'admin') {
+          return new Response(JSON.stringify({ success: false, error: 'Admin only' }), { status: 403, headers: CORS });
+        }
+        const config = await request.json();
+        await env.DATA.put('config:email', JSON.stringify(config));
         return new Response(JSON.stringify({ success: true }), { headers: CORS });
       }
 
