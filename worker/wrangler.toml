@@ -1,6 +1,6 @@
 # wrangler.toml - Cloudflare Worker Configuration
 
-name = "plugnmeet-api"
+name = "plain-thunder-7814"
 main = "worker.js"
 compatibility_date = "2024-01-01"
 
