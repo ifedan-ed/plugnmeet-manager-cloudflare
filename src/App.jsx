@@ -629,9 +629,8 @@ export default function PlugNMeetManager() {
                 <div><label className="block text-sm font-medium text-slate-300 mb-2">Email</label><Input icon={Mail} type="email" value={loginForm.email} onChange={(e) => setLoginForm(p => ({ ...p, email: e.target.value }))} placeholder="you@example.com" required autoComplete="email" /></div>
                 <div><label className="block text-sm font-medium text-slate-300 mb-2">Password</label><Input icon={Lock} type="password" value={loginForm.password} onChange={(e) => setLoginForm(p => ({ ...p, password: e.target.value }))} placeholder="••••••••" required autoComplete="current-password" /></div>
                 <button type="submit" disabled={loading} className="w-full py-4 bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white font-semibold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50">{loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Sign In'}</button>
-                <div className="flex items-center justify-between text-sm">
+                <div className="flex items-center justify-center text-sm">
                   <button type="button" onClick={() => setAuthMode('forgot')} className="text-slate-400 hover:text-violet-400">Forgot password?</button>
-                  <button type="button" onClick={() => setAuthMode('register')} className="text-violet-400 hover:text-violet-300">Create account</button>
                 </div>
               </form>
             )}
@@ -832,15 +831,43 @@ export default function PlugNMeetManager() {
                 <div className="bg-slate-900/50 rounded-2xl border border-slate-800/50 p-6">
                   <div className="flex items-center gap-3 mb-6"><Mail className="w-8 h-8 text-cyan-400" /><h3 className="text-lg font-semibold text-white">Email Settings</h3></div>
                   <form onSubmit={handleSaveEmailConfig} className="space-y-4">
-                    <div><label className="block text-sm text-slate-300 mb-2">From Address</label><Input type="email" value={emailForm.fromAddress} onChange={(e) => setEmailForm(p => ({ ...p, fromAddress: e.target.value }))} placeholder="noreply@yourdomain.com" /></div>
+                    <div>
+                      <label className="block text-sm text-slate-300 mb-2">Email Provider</label>
+                      <Select value={emailForm.provider || 'mailchannels'} onChange={(e) => setEmailForm(p => ({ ...p, provider: e.target.value }))}>
+                        <option value="mailchannels">MailChannels (free, needs DNS)</option>
+                        <option value="smtp2go">SMTP2GO</option>
+                        <option value="mailjet">Mailjet</option>
+                        <option value="sendgrid">SendGrid</option>
+                      </Select>
+                    </div>
+                    <div><label className="block text-sm text-slate-300 mb-2">From Address</label><Input type="email" value={emailForm.from || emailForm.fromAddress || ''} onChange={(e) => setEmailForm(p => ({ ...p, from: e.target.value, fromAddress: e.target.value }))} placeholder="noreply@yourdomain.com" /></div>
+                    {emailForm.provider && emailForm.provider !== 'mailchannels' && (
+                      <>
+                        <div><label className="block text-sm text-slate-300 mb-2">API Key</label><Input type="password" value={emailForm.apiKey || ''} onChange={(e) => setEmailForm(p => ({ ...p, apiKey: e.target.value }))} placeholder="Your API key" /></div>
+                        {emailForm.provider === 'mailjet' && (
+                          <div><label className="block text-sm text-slate-300 mb-2">API Secret</label><Input type="password" value={emailForm.apiSecret || ''} onChange={(e) => setEmailForm(p => ({ ...p, apiSecret: e.target.value }))} placeholder="Mailjet secret key" /></div>
+                        )}
+                      </>
+                    )}
                     <button type="submit" className="w-full py-3 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl">Save</button>
                   </form>
                   <div className="mt-4 p-4 bg-slate-800/50 rounded-xl text-sm text-slate-400">
-                    <p className="font-medium text-slate-300 mb-2">Email Provider</p>
-                    <p>Emails are sent via <strong>MailChannels</strong> (free with Cloudflare Workers).</p>
-                    <p className="mt-2">Requires DNS TXT record on your domain:</p>
-                    <code className="block mt-1 p-2 bg-slate-900 rounded text-xs text-cyan-400">v=spf1 include:relay.mailchannels.net ~all</code>
-                    <p className="mt-3 text-slate-500">Using Cloudflare-generated domain? Set up <strong>Resend</strong> instead (add RESEND_API_KEY to Worker variables).</p>
+                    {(!emailForm.provider || emailForm.provider === 'mailchannels') ? (
+                      <>
+                        <p className="font-medium text-slate-300 mb-2">MailChannels Setup</p>
+                        <p>Add these DNS TXT records to your domain:</p>
+                        <code className="block mt-1 p-2 bg-slate-900 rounded text-xs text-cyan-400">@ TXT "v=spf1 include:relay.mailchannels.net ~all"</code>
+                        <code className="block mt-1 p-2 bg-slate-900 rounded text-xs text-cyan-400">_mailchannels TXT "v=mc1 cfid=danitextech.workers.dev"</code>
+                      </>
+                    ) : (
+                      <>
+                        <p className="font-medium text-slate-300 mb-2">{emailForm.provider.toUpperCase()} Setup</p>
+                        <p>Get your API key from the {emailForm.provider} dashboard.</p>
+                        {emailForm.provider === 'smtp2go' && <p className="mt-2"><a href="https://www.smtp2go.com" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">smtp2go.com</a> - 1000 emails/month free</p>}
+                        {emailForm.provider === 'mailjet' && <p className="mt-2"><a href="https://www.mailjet.com" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">mailjet.com</a> - 200 emails/day free</p>}
+                        {emailForm.provider === 'sendgrid' && <p className="mt-2"><a href="https://sendgrid.com" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">sendgrid.com</a> - 100 emails/day free</p>}
+                      </>
+                    )}
                   </div>
                 </div>
               </div>

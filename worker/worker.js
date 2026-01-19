@@ -47,6 +47,69 @@ async function generateSignature(body, secret) {
 // EMAIL
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Option 1: SMTP via API relay (smtp2go, mailjet, sendgrid, etc.)
+async function sendEmailSMTP(smtpConfig, to, subject, html) {
+  // Using smtp2go API as example - works with most SMTP relay services
+  // You can also use: Mailjet, SendGrid, Postmark, etc.
+  
+  if (smtpConfig.provider === 'smtp2go') {
+    const response = await fetch('https://api.smtp2go.com/v3/email/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key: smtpConfig.apiKey,
+        to: [to],
+        sender: smtpConfig.from,
+        subject: subject,
+        html_body: html
+      })
+    });
+    const data = await response.json();
+    return { success: response.ok, data };
+  }
+  
+  if (smtpConfig.provider === 'mailjet') {
+    const auth = btoa(`${smtpConfig.apiKey}:${smtpConfig.apiSecret}`);
+    const response = await fetch('https://api.mailjet.com/v3.1/send', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Basic ${auth}`
+      },
+      body: JSON.stringify({
+        Messages: [{
+          From: { Email: smtpConfig.from, Name: 'PlugNMeet' },
+          To: [{ Email: to }],
+          Subject: subject,
+          HTMLPart: html
+        }]
+      })
+    });
+    const data = await response.json();
+    return { success: response.ok, data };
+  }
+
+  if (smtpConfig.provider === 'sendgrid') {
+    const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${smtpConfig.apiKey}`
+      },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: to }] }],
+        from: { email: smtpConfig.from },
+        subject: subject,
+        content: [{ type: 'text/html', value: html }]
+      })
+    });
+    return { success: response.ok, status: response.status };
+  }
+
+  return { success: false, error: 'Unknown SMTP provider' };
+}
+
+// Option 2: Resend
 async function sendEmailResend(env, to, subject, html) {
   if (!env.RESEND_API_KEY) return { success: false, error: 'RESEND_API_KEY not set' };
   const response = await fetch('https://api.resend.com/emails', {
@@ -60,6 +123,7 @@ async function sendEmailResend(env, to, subject, html) {
   return { success: response.ok, data: await response.json() };
 }
 
+// Option 3: MailChannels (free with Cloudflare Workers)
 async function sendEmailMailChannels(to, subject, html, from) {
   const response = await fetch('https://api.mailchannels.net/tx/v1/send', {
     method: 'POST',
@@ -125,32 +189,9 @@ export default {
         return new Response(JSON.stringify({ status: 'ok', time: Date.now() }), { headers: CORS });
       }
 
-      // Register
+      // Register - DISABLED for public, only admin can create users via /api/users
       if (path === '/api/auth/register' && request.method === 'POST') {
-        const { name, email, password } = await request.json();
-        if (!name || !email || !password) {
-          return new Response(JSON.stringify({ success: false, error: 'Missing required fields' }), { status: 400, headers: CORS });
-        }
-        if (password.length < 6) {
-          return new Response(JSON.stringify({ success: false, error: 'Password must be at least 6 characters' }), { status: 400, headers: CORS });
-        }
-        const existing = await env.DATA.get(`user:${email.toLowerCase()}`);
-        if (existing) {
-          return new Response(JSON.stringify({ success: false, error: 'Email already registered' }), { status: 400, headers: CORS });
-        }
-        const user = {
-          id: crypto.randomUUID(),
-          name: name.trim(),
-          email: email.toLowerCase().trim(),
-          password: await hashPassword(password, env),
-          role: 'moderator',
-          createdAt: Date.now()
-        };
-        await env.DATA.put(`user:${user.email}`, JSON.stringify(user));
-        const usersList = JSON.parse(await env.DATA.get('users:list') || '[]');
-        usersList.push({ id: user.id, email: user.email, name: user.name, role: user.role, createdAt: user.createdAt });
-        await env.DATA.put('users:list', JSON.stringify(usersList));
-        return new Response(JSON.stringify({ success: true }), { headers: CORS });
+        return new Response(JSON.stringify({ success: false, error: 'Public registration is disabled. Contact admin for an account.' }), { status: 403, headers: CORS });
       }
 
       // Login
@@ -424,13 +465,19 @@ export default {
         const { to, name, meetingTitle, joinLink, isAdmin } = await request.json();
         const emailConfig = JSON.parse(await env.DATA.get('config:email') || '{}');
         const html = inviteEmailTemplate(name, meetingTitle, joinLink, isAdmin);
+        const subject = `You're invited: ${meetingTitle}`;
 
         let result;
-        if (env.RESEND_API_KEY) {
-          result = await sendEmailResend(env, to, `You're invited: ${meetingTitle}`, html);
+        
+        // Priority: 1) SMTP config in app, 2) Resend env var, 3) MailChannels
+        if (emailConfig.provider && emailConfig.provider !== 'mailchannels') {
+          result = await sendEmailSMTP(emailConfig, to, subject, html);
+        } else if (env.RESEND_API_KEY) {
+          result = await sendEmailResend(env, to, subject, html);
         } else {
-          result = await sendEmailMailChannels(to, `You're invited: ${meetingTitle}`, html, emailConfig.fromAddress);
+          result = await sendEmailMailChannels(to, subject, html, emailConfig.fromAddress);
         }
+        
         return new Response(JSON.stringify(result), { headers: CORS });
       }
 
