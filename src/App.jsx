@@ -422,14 +422,28 @@ export default function PlugNMeetManager() {
   // PLUGNMEET API
   // ─────────────────────────────────────────────────────────────────────────
 
+  // PlugNMeet API calls go through our worker proxy to avoid CORS issues
   const plugnmeetApi = useCallback(async (endpoint, body) => {
     if (!serverConfig) throw new Error('Server not configured');
-    const bodyStr = JSON.stringify(body);
-    const signature = await generateSignature(bodyStr, serverConfig.apiSecret);
-    const response = await fetch(`${serverConfig.url}/auth${endpoint}`, {
+    if (isLocalMode) {
+      // Local mode: call PlugNMeet directly (won't work due to CORS, but keeping for reference)
+      const bodyStr = JSON.stringify(body);
+      const signature = await generateSignature(bodyStr, serverConfig.apiSecret);
+      const response = await fetch(`${serverConfig.url}/auth${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'API-KEY': serverConfig.apiKey, 'HASH-SIGNATURE': signature },
+        body: bodyStr
+      });
+      return response.json();
+    }
+    // Cloud mode: use worker proxy
+    const response = await fetch(`${API_URL}/api/plugnmeet${endpoint}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'API-KEY': serverConfig.apiKey, 'HASH-SIGNATURE': signature },
-      body: bodyStr
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${api.getToken()}`
+      },
+      body: JSON.stringify(body)
     });
     return response.json();
   }, [serverConfig]);

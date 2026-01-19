@@ -1,29 +1,30 @@
 // worker.js - Cloudflare Worker Backend for PlugNMeet Manager
-// Deploy via Cloudflare Dashboard: Workers & Pages → Create Worker → Edit Code
+// Auto-deployed via GitHub Actions
 // Required KV Bindings: DATA, SESSIONS
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
 
-function getCorsHeaders(env, request) {
-  // If ALLOWED_ORIGIN is set, restrict CORS to that domain
-  // Otherwise allow all (for development)
-  const origin = request.headers.get('Origin') || '*';
+function getCorsHeaders(env) {
   const allowedOrigin = env.ALLOWED_ORIGIN || '*';
-  
   return {
-    'Access-Control-Allow-Origin': allowedOrigin === '*' ? '*' : allowedOrigin,
+    'Access-Control-Allow-Origin': allowedOrigin,
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Content-Type': 'application/json'
   };
 }
 
-// Password hashing with salt (use bcrypt in production for better security)
-async function hashPassword(password) {
+async function hashPassword(password, env) {
+  // Use stored salt for consistency across deployments
+  let salt = await env.DATA.get('system:salt');
+  if (!salt) {
+    salt = crypto.randomUUID() + '-' + Date.now().toString(36);
+    await env.DATA.put('system:salt', salt);
+  }
   const encoder = new TextEncoder();
-  const data = encoder.encode(password + 'plugnmeet-salt-2024-secure');
+  const data = encoder.encode(password + salt);
   const hash = await crypto.subtle.digest('SHA-256', data);
   return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
@@ -32,28 +33,33 @@ function generateToken() {
   return crypto.randomUUID() + '-' + Date.now().toString(36);
 }
 
+// Generate HMAC signature for PlugNMeet API
+async function generateSignature(body, secret) {
+  const encoder = new TextEncoder();
+  const keyData = encoder.encode(secret);
+  const messageData = encoder.encode(body);
+  const cryptoKey = await crypto.subtle.importKey('raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const signature = await crypto.subtle.sign('HMAC', cryptoKey, messageData);
+  return Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// EMAIL SENDING
+// EMAIL
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Option 1: Resend (set RESEND_API_KEY in Worker variables)
 async function sendEmailResend(env, to, subject, html) {
   if (!env.RESEND_API_KEY) return { success: false, error: 'RESEND_API_KEY not set' };
-  
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       from: env.EMAIL_FROM || 'PlugNMeet <noreply@yourdomain.com>',
-      to: [to],
-      subject,
-      html
+      to: [to], subject, html
     })
   });
   return { success: response.ok, data: await response.json() };
 }
 
-// Option 2: MailChannels (free with Cloudflare Workers, just add SPF record)
 async function sendEmailMailChannels(to, subject, html, from) {
   const response = await fetch('https://api.mailchannels.net/tx/v1/send', {
     method: 'POST',
@@ -68,7 +74,6 @@ async function sendEmailMailChannels(to, subject, html, from) {
   return { success: response.ok, status: response.status };
 }
 
-// Email template
 function inviteEmailTemplate(name, meetingTitle, joinLink, isAdmin) {
   return `
 <!DOCTYPE html>
@@ -86,7 +91,6 @@ function inviteEmailTemplate(name, meetingTitle, joinLink, isAdmin) {
 </head>
 <body>
   <div class="container">
-    <div style="text-align:center;font-size:48px;margin-bottom:20px;">📹</div>
     <h1>You're Invited!</h1>
     <p>Hi ${name},</p>
     <p>You've been invited to <strong>${meetingTitle}</strong> as a <span class="role">${isAdmin ? 'Moderator' : 'Participant'}</span>.</p>
@@ -103,9 +107,8 @@ function inviteEmailTemplate(name, meetingTitle, joinLink, isAdmin) {
 
 export default {
   async fetch(request, env) {
-    const CORS = getCorsHeaders(env, request);
-    
-    // CORS preflight
+    const CORS = getCorsHeaders(env);
+
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: CORS });
     }
@@ -115,89 +118,79 @@ export default {
 
     try {
       // ─────────────────────────────────────────────────────────────────────
-      // PUBLIC AUTH ROUTES
+      // PUBLIC ROUTES
       // ─────────────────────────────────────────────────────────────────────
+
+      if (path === '/api/health') {
+        return new Response(JSON.stringify({ status: 'ok', time: Date.now() }), { headers: CORS });
+      }
 
       // Register
       if (path === '/api/auth/register' && request.method === 'POST') {
         const { name, email, password } = await request.json();
-        
         if (!name || !email || !password) {
           return new Response(JSON.stringify({ success: false, error: 'Missing required fields' }), { status: 400, headers: CORS });
         }
-        
         if (password.length < 6) {
           return new Response(JSON.stringify({ success: false, error: 'Password must be at least 6 characters' }), { status: 400, headers: CORS });
         }
-
         const existing = await env.DATA.get(`user:${email.toLowerCase()}`);
         if (existing) {
           return new Response(JSON.stringify({ success: false, error: 'Email already registered' }), { status: 400, headers: CORS });
         }
-
         const user = {
           id: crypto.randomUUID(),
           name: name.trim(),
           email: email.toLowerCase().trim(),
-          password: await hashPassword(password),
+          password: await hashPassword(password, env),
           role: 'moderator',
           createdAt: Date.now()
         };
-
         await env.DATA.put(`user:${user.email}`, JSON.stringify(user));
-
         const usersList = JSON.parse(await env.DATA.get('users:list') || '[]');
         usersList.push({ id: user.id, email: user.email, name: user.name, role: user.role, createdAt: user.createdAt });
         await env.DATA.put('users:list', JSON.stringify(usersList));
-
         return new Response(JSON.stringify({ success: true }), { headers: CORS });
       }
 
       // Login
       if (path === '/api/auth/login' && request.method === 'POST') {
         const { email, password } = await request.json();
-
         const userData = await env.DATA.get(`user:${email.toLowerCase()}`);
         if (!userData) {
           return new Response(JSON.stringify({ success: false, error: 'Invalid credentials' }), { status: 401, headers: CORS });
         }
-
         const user = JSON.parse(userData);
-        if (user.password !== await hashPassword(password)) {
+        if (user.password !== await hashPassword(password, env)) {
           return new Response(JSON.stringify({ success: false, error: 'Invalid credentials' }), { status: 401, headers: CORS });
         }
-
         const token = generateToken();
-        await env.SESSIONS.put(token, JSON.stringify({ userId: user.id, email: user.email }), { expirationTtl: 604800 }); // 7 days
-
+        await env.SESSIONS.put(token, JSON.stringify({ userId: user.id, email: user.email }), { expirationTtl: 604800 });
         const { password: _, ...safeUser } = user;
         return new Response(JSON.stringify({ success: true, token, user: safeUser }), { headers: CORS });
       }
 
-      // Initialize (create default admin - run once)
+      // Initialize
       if (path === '/api/init' && request.method === 'POST') {
         const usersList = await env.DATA.get('users:list');
         if (usersList && JSON.parse(usersList).length > 0) {
           return new Response(JSON.stringify({ success: false, error: 'Already initialized' }), { status: 400, headers: CORS });
         }
-
         const admin = {
           id: crypto.randomUUID(),
           name: 'Admin User',
           email: 'admin@example.com',
-          password: await hashPassword('admin123'),
+          password: await hashPassword('admin123', env),
           role: 'admin',
           createdAt: Date.now()
         };
-
         await env.DATA.put(`user:${admin.email}`, JSON.stringify(admin));
         await env.DATA.put('users:list', JSON.stringify([{ id: admin.id, email: admin.email, name: admin.name, role: admin.role, createdAt: admin.createdAt }]));
-
-        return new Response(JSON.stringify({ success: true, message: 'Admin created: admin@example.com / admin123 - CHANGE THIS PASSWORD!' }), { headers: CORS });
+        return new Response(JSON.stringify({ success: true, message: 'Admin created: admin@example.com / admin123' }), { headers: CORS });
       }
 
       // ─────────────────────────────────────────────────────────────────────
-      // AUTH MIDDLEWARE - All routes below require authentication
+      // AUTH MIDDLEWARE
       // ─────────────────────────────────────────────────────────────────────
 
       const authHeader = request.headers.get('Authorization');
@@ -221,6 +214,60 @@ export default {
       }
 
       // ─────────────────────────────────────────────────────────────────────
+      // PLUGNMEET PROXY - Solves CORS and hides API secret
+      // ─────────────────────────────────────────────────────────────────────
+
+      if (path.startsWith('/api/plugnmeet/') && request.method === 'POST') {
+        const serverConfig = JSON.parse(await env.DATA.get('config:server') || 'null');
+        if (!serverConfig) {
+          return new Response(JSON.stringify({ success: false, error: 'PlugNMeet server not configured' }), { status: 400, headers: CORS });
+        }
+
+        // Extract the PlugNMeet endpoint from the path
+        // /api/plugnmeet/room/create -> /auth/room/create
+        const plugnmeetEndpoint = path.replace('/api/plugnmeet', '/auth');
+        
+        const body = await request.text();
+        const signature = await generateSignature(body, serverConfig.apiSecret);
+
+        try {
+          const response = await fetch(`${serverConfig.url}${plugnmeetEndpoint}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'API-KEY': serverConfig.apiKey,
+              'HASH-SIGNATURE': signature
+            },
+            body: body
+          });
+
+          const data = await response.json();
+          return new Response(JSON.stringify(data), { headers: CORS });
+        } catch (err) {
+          return new Response(JSON.stringify({ success: false, error: 'PlugNMeet request failed: ' + err.message }), { status: 500, headers: CORS });
+        }
+      }
+
+      // ─────────────────────────────────────────────────────────────────────
+      // CHANGE PASSWORD
+      // ─────────────────────────────────────────────────────────────────────
+
+      if (path === '/api/auth/change-password' && request.method === 'POST') {
+        const { currentPassword, newPassword } = await request.json();
+        if (!newPassword || newPassword.length < 6) {
+          return new Response(JSON.stringify({ success: false, error: 'Password must be at least 6 characters' }), { status: 400, headers: CORS });
+        }
+        const userData = await env.DATA.get(`user:${currentUser.email}`);
+        const user = JSON.parse(userData);
+        if (user.password !== await hashPassword(currentPassword, env)) {
+          return new Response(JSON.stringify({ success: false, error: 'Current password is incorrect' }), { status: 400, headers: CORS });
+        }
+        user.password = await hashPassword(newPassword, env);
+        await env.DATA.put(`user:${currentUser.email}`, JSON.stringify(user));
+        return new Response(JSON.stringify({ success: true }), { headers: CORS });
+      }
+
+      // ─────────────────────────────────────────────────────────────────────
       // MEETINGS
       // ─────────────────────────────────────────────────────────────────────
 
@@ -231,17 +278,10 @@ export default {
 
       if (path === '/api/meetings' && request.method === 'POST') {
         const data = await request.json();
-        const meeting = {
-          id: crypto.randomUUID(),
-          ...data,
-          createdBy: currentUser.id,
-          createdAt: Date.now()
-        };
-
+        const meeting = { id: crypto.randomUUID(), ...data, createdBy: currentUser.id, createdAt: Date.now() };
         const meetings = JSON.parse(await env.DATA.get('meetings:list') || '[]');
         meetings.push(meeting);
         await env.DATA.put('meetings:list', JSON.stringify(meetings));
-
         return new Response(JSON.stringify({ success: true, meeting }), { headers: CORS });
       }
 
@@ -264,18 +304,10 @@ export default {
 
       if (path === '/api/invites' && request.method === 'POST') {
         const data = await request.json();
-        const invite = {
-          id: crypto.randomUUID(),
-          ...data,
-          createdBy: currentUser.id,
-          createdAt: Date.now(),
-          status: 'pending'
-        };
-
+        const invite = { id: crypto.randomUUID(), ...data, createdBy: currentUser.id, createdAt: Date.now(), status: 'pending' };
         const invites = JSON.parse(await env.DATA.get('invites:list') || '[]');
         invites.push(invite);
         await env.DATA.put('invites:list', JSON.stringify(invites));
-
         return new Response(JSON.stringify({ success: true, invite }), { headers: CORS });
       }
 
@@ -284,30 +316,6 @@ export default {
         let invites = JSON.parse(await env.DATA.get('invites:list') || '[]');
         invites = invites.filter(i => i.id !== id);
         await env.DATA.put('invites:list', JSON.stringify(invites));
-        return new Response(JSON.stringify({ success: true }), { headers: CORS });
-      }
-
-      // ─────────────────────────────────────────────────────────────────────
-      // CHANGE PASSWORD
-      // ─────────────────────────────────────────────────────────────────────
-
-      if (path === '/api/auth/change-password' && request.method === 'POST') {
-        const { currentPassword, newPassword } = await request.json();
-        
-        if (!newPassword || newPassword.length < 6) {
-          return new Response(JSON.stringify({ success: false, error: 'Password must be at least 6 characters' }), { status: 400, headers: CORS });
-        }
-
-        const userData = await env.DATA.get(`user:${currentUser.email}`);
-        const user = JSON.parse(userData);
-        
-        if (user.password !== await hashPassword(currentPassword)) {
-          return new Response(JSON.stringify({ success: false, error: 'Current password is incorrect' }), { status: 400, headers: CORS });
-        }
-
-        user.password = await hashPassword(newPassword);
-        await env.DATA.put(`user:${currentUser.email}`, JSON.stringify(user));
-
         return new Response(JSON.stringify({ success: true }), { headers: CORS });
       }
 
@@ -327,33 +335,26 @@ export default {
         if (currentUser.role !== 'admin') {
           return new Response(JSON.stringify({ success: false, error: 'Admin only' }), { status: 403, headers: CORS });
         }
-        
         const { name, email, password, role } = await request.json();
-        
         if (!name || !email || !password) {
           return new Response(JSON.stringify({ success: false, error: 'Missing required fields' }), { status: 400, headers: CORS });
         }
-        
         const existing = await env.DATA.get(`user:${email.toLowerCase()}`);
         if (existing) {
           return new Response(JSON.stringify({ success: false, error: 'Email already exists' }), { status: 400, headers: CORS });
         }
-
         const newUser = {
           id: crypto.randomUUID(),
           name: name.trim(),
           email: email.toLowerCase().trim(),
-          password: await hashPassword(password),
+          password: await hashPassword(password, env),
           role: role || 'moderator',
           createdAt: Date.now()
         };
-
         await env.DATA.put(`user:${newUser.email}`, JSON.stringify(newUser));
-
         const usersList = JSON.parse(await env.DATA.get('users:list') || '[]');
         usersList.push({ id: newUser.id, email: newUser.email, name: newUser.name, role: newUser.role, createdAt: newUser.createdAt });
         await env.DATA.put('users:list', JSON.stringify(usersList));
-
         return new Response(JSON.stringify({ success: true, user: { ...newUser, password: undefined } }), { headers: CORS });
       }
 
@@ -361,23 +362,17 @@ export default {
         if (currentUser.role !== 'admin') {
           return new Response(JSON.stringify({ success: false, error: 'Admin only' }), { status: 403, headers: CORS });
         }
-        
         const userId = path.split('/')[3];
-        
-        // Can't delete yourself
         if (userId === currentUser.id) {
           return new Response(JSON.stringify({ success: false, error: 'Cannot delete yourself' }), { status: 400, headers: CORS });
         }
-
         let usersList = JSON.parse(await env.DATA.get('users:list') || '[]');
         const userToDelete = usersList.find(u => u.id === userId);
-        
         if (userToDelete) {
           await env.DATA.delete(`user:${userToDelete.email}`);
           usersList = usersList.filter(u => u.id !== userId);
           await env.DATA.put('users:list', JSON.stringify(usersList));
         }
-
         return new Response(JSON.stringify({ success: true }), { headers: CORS });
       }
 
@@ -391,12 +386,10 @@ export default {
         }
         const serverConfig = JSON.parse(await env.DATA.get('config:server') || 'null');
         const emailConfig = JSON.parse(await env.DATA.get('config:email') || '{"fromAddress":""}');
-        
-        // Don't expose full secrets - mask them
+        // Mask secrets
         if (serverConfig?.apiSecret) {
           serverConfig.apiSecret = '••••••••' + serverConfig.apiSecret.slice(-4);
         }
-        
         return new Response(JSON.stringify({ success: true, serverConfig, emailConfig }), { headers: CORS });
       }
 
@@ -405,30 +398,12 @@ export default {
           return new Response(JSON.stringify({ success: false, error: 'Admin only' }), { status: 403, headers: CORS });
         }
         const config = await request.json();
-        
         // If secret is masked, keep the old one
         if (config.apiSecret?.startsWith('••••')) {
           const existing = JSON.parse(await env.DATA.get('config:server') || '{}');
           config.apiSecret = existing.apiSecret;
         }
-        
         await env.DATA.put('config:server', JSON.stringify(config));
-        return new Response(JSON.stringify({ success: true }), { headers: CORS });
-      }
-
-      if (path === '/api/config/smtp' && request.method === 'POST') {
-        if (currentUser.role !== 'admin') {
-          return new Response(JSON.stringify({ success: false, error: 'Admin only' }), { status: 403, headers: CORS });
-        }
-        const config = await request.json();
-        
-        // If password is masked, keep the old one
-        if (config.password === '••••••••') {
-          const existing = JSON.parse(await env.DATA.get('config:smtp') || '{}');
-          config.password = existing.password;
-        }
-        
-        await env.DATA.put('config:smtp', JSON.stringify(config));
         return new Response(JSON.stringify({ success: true }), { headers: CORS });
       }
 
@@ -447,45 +422,16 @@ export default {
 
       if (path === '/api/email/invite' && request.method === 'POST') {
         const { to, name, meetingTitle, joinLink, isAdmin } = await request.json();
+        const emailConfig = JSON.parse(await env.DATA.get('config:email') || '{}');
         const html = inviteEmailTemplate(name, meetingTitle, joinLink, isAdmin);
-        
+
         let result;
         if (env.RESEND_API_KEY) {
           result = await sendEmailResend(env, to, `You're invited: ${meetingTitle}`, html);
         } else {
-          const smtpConfig = JSON.parse(await env.DATA.get('config:smtp') || '{}');
-          result = await sendEmailMailChannels(to, `You're invited: ${meetingTitle}`, html, smtpConfig.from);
+          result = await sendEmailMailChannels(to, `You're invited: ${meetingTitle}`, html, emailConfig.fromAddress);
         }
-
         return new Response(JSON.stringify(result), { headers: CORS });
-      }
-
-      if (path === '/api/email/reset' && request.method === 'POST') {
-        const { email } = await request.json();
-        
-        // Don't reveal if email exists
-        const userData = await env.DATA.get(`user:${email.toLowerCase()}`);
-        if (userData) {
-          const resetToken = generateToken();
-          await env.DATA.put(`reset:${resetToken}`, email.toLowerCase(), { expirationTtl: 3600 });
-          
-          const html = `
-            <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:40px;background:#1e293b;color:#f8fafc;border-radius:16px;">
-              <h1>Reset Password</h1>
-              <p>Click below to reset your password (expires in 1 hour):</p>
-              <p><a href="${url.origin}/reset?token=${resetToken}" style="display:inline-block;background:#8b5cf6;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;">Reset Password</a></p>
-            </div>
-          `;
-          
-          if (env.RESEND_API_KEY) {
-            await sendEmailResend(env, email, 'Reset Your Password', html);
-          } else {
-            const smtpConfig = JSON.parse(await env.DATA.get('config:smtp') || '{}');
-            await sendEmailMailChannels(email, 'Reset Your Password', html, smtpConfig.from);
-          }
-        }
-        
-        return new Response(JSON.stringify({ success: true, message: 'If email exists, reset link sent' }), { headers: CORS });
       }
 
       // ─────────────────────────────────────────────────────────────────────
@@ -500,5 +446,3 @@ export default {
     }
   }
 };
-// Updated Mon Jan 19 12:49:32 PM EST 2026
-// Updated Mon Jan 19 12:54:28 PM EST 2026
