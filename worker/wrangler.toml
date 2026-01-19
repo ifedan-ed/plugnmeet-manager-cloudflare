@@ -1,0 +1,22 @@
+# wrangler.toml - Cloudflare Worker Configuration
+
+name = "plugnmeet-api"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# KV Namespaces - Create these in Cloudflare Dashboard first
+# Workers & Pages → KV → Create namespace
+[[kv_namespaces]]
+binding = "DATA"
+id = "YOUR_DATA_KV_ID_HERE"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "YOUR_SESSIONS_KV_ID_HERE"
+
+# Environment Variables (set in Cloudflare Dashboard → Worker → Settings → Variables)
+# RESEND_API_KEY = "re_xxxxx" (get free key at resend.com)
+# EMAIL_FROM = "PlugNMeet <noreply@yourdomain.com>"
+
+[vars]
+ENVIRONMENT = "production"
