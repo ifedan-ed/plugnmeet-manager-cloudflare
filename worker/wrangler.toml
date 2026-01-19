@@ -1,5 +1,5 @@
 # wrangler.toml - Cloudflare Worker Configuration
-
+account_id = "8b8946de7939ba6d8d8acf6fcac63cb7"
 name = "plain-thunder-7814"
 main = "worker.js"
 compatibility_date = "2024-01-01"
