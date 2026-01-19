@@ -1,0 +1,13 @@
+{
+  "name": "worker",
+  "version": "1.0.0",
+  "description": "This Cloudflare Worker provides: - ✅ **Persistent storage** via Cloudflare KV (data shared across all users) - ✅ **Real email sending** via Resend or MailChannels - ✅ **User authentication** with sessions - ✅ **Admin/moderator roles**",
+  "main": "worker.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
