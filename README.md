@@ -1,229 +1,281 @@
 # PlugNMeet Meeting Manager
 
-A modern web interface for managing PlugNMeet video conference rooms with user authentication, meeting management, and email invitations.
+A free, open-source web application for managing PlugNMeet video conference rooms. Built with React and Cloudflare Workers - completely serverless and runs on Cloudflare's free tier.
+
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange.svg)
+
+## What is this?
+
+This is a management dashboard for [PlugNMeet](https://www.plugnmeet.org/), an open-source video conferencing solution. It allows you to:
+
+- **Create and manage meetings** - Set up video conference rooms with custom settings
+- **Generate join links** - Create personalized links for each participant
+- **Send email invitations** - Invite people directly from the dashboard
+- **Manage users** - Admin and moderator roles with authentication
 
 ## Features
 
-- 🔐 **User Authentication** - Admin and moderator roles
+- 🔐 **User Authentication** - Secure login with admin and moderator roles
 - 📹 **Meeting Management** - Create, configure, and delete meetings
-- 🔗 **Join Link Generation** - Generate unique join links for participants
-- 📧 **Email Invitations** - Send meeting invites via MailChannels (free)
-- 💾 **Persistent Storage** - Cloudflare KV (cloud) or localStorage (local fallback)
-- 📱 **Responsive Design** - Works on desktop and mobile
+- 🔗 **Join Link Generation** - Unique links for each participant
+- 📧 **Email Invitations** - Send invites via Resend, SMTP2GO, Mailjet, or SendGrid
+- 💾 **Cloud Storage** - Data stored in Cloudflare KV (free)
+- 📱 **Responsive Design** - Works on desktop, tablet, and mobile
+- 🔄 **Auto-Deploy** - Push to GitHub and everything deploys automatically
 
----
+## Architecture Overview
 
-## Quick Start (Local Mode)
-
-Without the backend, the app runs in **Local Mode** - data is stored in your browser only.
-
-```bash
-git clone https://github.com/ifedan-ed/plugnmeet-manager-cloudflare.git
-cd plugnmeet-manager-cloudflare
-npm install
-npm run dev
+```
+┌─────────────────────┐         ┌─────────────────────┐         ┌─────────────────┐
+│                     │         │                     │         │                 │
+│   Your Browser      │────────▶│  Cloudflare Worker  │────────▶│  PlugNMeet      │
+│   (React App)       │         │  (API Backend)      │         │  Server         │
+│                     │         │                     │         │                 │
+└─────────────────────┘         └──────────┬──────────┘         └─────────────────┘
+                                           │
+                                           ▼
+                                ┌─────────────────────┐
+                                │                     │
+                                │   Cloudflare KV     │
+                                │   (Database)        │
+                                │                     │
+                                └─────────────────────┘
 ```
 
-Default login: `admin@example.com` / `admin123`
-
-> ⚠️ **Local Mode Warning**: In local mode, all data including PlugNMeet API secrets are stored in browser localStorage. Use cloud mode for production.
+**Why this architecture?**
+- **Free hosting** - Cloudflare Pages and Workers have generous free tiers
+- **No server needed** - Everything runs on Cloudflare's edge network
+- **Fast** - Deployed globally, close to your users
+- **Secure** - API secrets are stored server-side, never exposed to browsers
 
 ---
 
-## Full Deployment Guide
+## Quick Start (5 minutes)
 
-### Step 1: Deploy Frontend to Cloudflare Pages
+### Prerequisites
 
-1. Push code to GitHub
-2. In **Cloudflare Dashboard** → **Workers & Pages** → **Create** → **Pages**
-3. Connect to your GitHub repository
-4. Build settings:
+- A [GitHub](https://github.com) account
+- A [Cloudflare](https://cloudflare.com) account (free)
+- [Node.js](https://nodejs.org) installed on your computer
+- A PlugNMeet server (you can use the demo server for testing)
+
+### Step 1: Fork and Clone
+
+1. Fork this repository on GitHub
+2. Clone to your computer:
+   ```bash
+   git clone https://github.com/YOUR_USERNAME/plugnmeet-manager-cloudflare.git
+   cd plugnmeet-manager-cloudflare
+   ```
+
+### Step 2: Create Cloudflare Resources
+
+#### 2a. Create KV Namespaces (Database)
+
+1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com)
+2. Click **Workers & Pages** in the sidebar
+3. Click **KV** tab
+4. Click **Create a namespace**
+5. Create two namespaces:
+   - Name: `plugnmeet-data` → Click Create → **Copy the ID**
+   - Name: `plugnmeet-sessions` → Click Create → **Copy the ID**
+
+#### 2b. Update wrangler.toml
+
+Open `worker/wrangler.toml` and update these values:
+
+```toml
+# Replace with your Cloudflare account ID
+# Find it: Dashboard → Workers & Pages → right sidebar shows Account ID
+account_id = "YOUR_ACCOUNT_ID"
+
+[[kv_namespaces]]
+binding = "DATA"
+id = "YOUR_PLUGNMEET_DATA_ID"    # Paste the ID you copied
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "YOUR_PLUGNMEET_SESSIONS_ID"  # Paste the ID you copied
+```
+
+### Step 3: Deploy the Frontend (Cloudflare Pages)
+
+1. Go to **Cloudflare Dashboard** → **Workers & Pages**
+2. Click **Create** → **Pages** → **Connect to Git**
+3. Select your forked repository
+4. Configure build settings:
    - **Framework preset**: Vite
    - **Build command**: `npm run build`
    - **Build output directory**: `dist`
 5. Click **Save and Deploy**
+6. Wait for deployment (1-2 minutes)
+7. Note your URL: `https://your-project.pages.dev`
 
-**Your frontend URL** will be something like:
-- `https://plugnmeet-manager-cloudflare.pages.dev`
-- `https://your-project-name.pages.dev`
-- Or a custom domain if you configure one
+### Step 4: Deploy the Worker (Backend API)
 
----
+#### 4a. Create GitHub Secret for Auto-Deploy
 
-### Step 2: Create KV Namespaces
+1. Go to **Cloudflare Dashboard** → Click your profile (top right) → **My Profile**
+2. Click **API Tokens** → **Create Token**
+3. Use template **"Edit Cloudflare Workers"**
+4. Click **Continue to summary** → **Create Token**
+5. **Copy the token** (you only see it once!)
 
-1. Go to **Workers & Pages** → **KV**
-2. Create two namespaces:
-   - `plugnmeet-data`
-   - `plugnmeet-sessions`
+Now add it to GitHub:
 
----
+1. Go to your GitHub repo → **Settings** → **Secrets and variables** → **Actions**
+2. Click **New repository secret**
+3. Name: `CF_API_TOKEN`
+4. Value: paste the token
+5. Click **Add secret**
 
-### Step 3: Deploy Worker Backend
-
-1. Go to **Workers & Pages** → **Create** → **Create Worker**
-2. Name it (e.g., `plugnmeet-api`) and click **Deploy**
-3. Click **Edit code**
-4. Delete all default code
-5. Paste the contents of `worker/worker.js`
-6. Click **Save and Deploy**
-
-**Your worker URL** will be something like:
-- `https://plugnmeet-api.your-subdomain.workers.dev`
-- `https://random-name-1234.your-subdomain.workers.dev`
-
----
-
-### Step 4: Add KV Bindings (REQUIRED)
-
-1. Go to your Worker → **Settings** → **Bindings**
-2. Add **KV Namespace**:
-   - Variable name: `DATA`
-   - Select: `plugnmeet-data`
-3. Add **KV Namespace**:
-   - Variable name: `SESSIONS`
-   - Select: `plugnmeet-sessions`
-4. Click **Save**
-
-> ⚠️ **The worker will not function without these bindings!**
-
----
-
-### Step 5: Initialize Database
+#### 4b. Push to Deploy
 
 ```bash
-curl -X POST https://YOUR_WORKER_URL/api/init
-```
-
-Response:
-```json
-{"success":true,"message":"Admin created: admin@example.com / admin123 - CHANGE THIS PASSWORD!"}
-```
-
-> ⚠️ **Change the admin password immediately after first login!**
-
----
-
-### Step 6: Connect Frontend to Backend
-
-**Option A: Cloudflare Pages Dashboard (Recommended)**
-
-1. Go to your Pages project → **Settings** → **Environment variables**
-2. Add variable:
-   - Name: `VITE_API_URL`
-   - Value: `https://YOUR_WORKER_URL`
-3. Go to **Deployments** → Trigger a new deployment
-
-**Option B: .env file**
-
-```bash
-echo "VITE_API_URL=https://YOUR_WORKER_URL" > .env
-git add .env
-git commit -m "Add API URL"
+git add -A
+git commit -m "Configure for my Cloudflare account"
 git push
 ```
 
+The GitHub Action will automatically deploy your worker. Check the **Actions** tab to see progress.
+
+### Step 5: Initialize the Database
+
+After the worker deploys, create the admin user:
+
+```bash
+curl -X POST https://your-worker.workers.dev/api/init
+```
+
+Replace `your-worker.workers.dev` with your actual worker URL (shown in Cloudflare Dashboard → Workers).
+
+You should see:
+```json
+{"success":true,"message":"Admin created: admin@example.com / admin123"}
+```
+
+### Step 6: Connect Frontend to Backend
+
+1. Go to **Cloudflare Pages** → Your project → **Settings** → **Environment variables**
+2. Click **Add variable**:
+   - **Variable name**: `VITE_API_URL`
+   - **Value**: `https://your-worker.workers.dev` (your worker URL)
+3. Click **Save**
+4. Go to **Deployments** → Click **Retry deployment** on the latest
+
+### Step 7: Login and Configure
+
+1. Open your Pages URL (e.g., `https://your-project.pages.dev`)
+2. Login with:
+   - Email: `admin@example.com`
+   - Password: `admin123`
+3. **Change your password immediately!** (Click the key icon in the sidebar)
+4. Go to **Settings** and configure your PlugNMeet server:
+   - **Server URL**: `https://your-plugnmeet-server.com` (or `https://demo.plugnmeet.com` for testing)
+   - **API Key**: Your PlugNMeet API key
+   - **API Secret**: Your PlugNMeet API secret
+5. Click **Test** to verify, then **Save**
+
+🎉 **Done!** You can now create meetings and send invitations.
+
 ---
 
-## Email Setup (SMTP)
+## Email Setup
 
-The app supports two email providers. Choose one:
+To send email invitations, you need to configure an email provider.
 
-### Option 1: MailChannels (Free - Recommended)
+### Option 1: Resend (Recommended)
 
-MailChannels is **free** for Cloudflare Workers. Setup:
-
-1. Add a DNS TXT record to your domain:
-   ```
-   Type: TXT
-   Name: @
-   Value: v=spf1 a mx include:relay.mailchannels.net ~all
-   ```
-
-2. In the app, go to **Settings** → **SMTP Settings**:
-   - **From Address**: `noreply@yourdomain.com` (must be your domain)
-   - Other fields can be left empty (MailChannels doesn't need them)
-
-3. That's it! The worker automatically uses MailChannels when no Resend key is set.
-
-### Option 2: Resend
-
-1. Sign up at https://resend.com (free: 3000 emails/month)
-2. Get your API key
-3. In Cloudflare Worker → **Settings** → **Variables**:
-   - Add: `RESEND_API_KEY` = `re_xxxxx...`
+1. Sign up at [resend.com](https://resend.com) (free: 3,000 emails/month)
+2. Go to **Domains** → Add your domain → Add the DNS records they provide
+3. Go to **API Keys** → Create an API key
+4. In **Cloudflare Dashboard** → **Workers** → Your worker → **Settings** → **Variables**:
+   - Add: `RESEND_API_KEY` = `re_xxxxx...` (your key)
    - Add: `EMAIL_FROM` = `PlugNMeet <noreply@yourdomain.com>`
 
-### SMTP Settings in App
+### Option 2: SMTP2GO, Mailjet, or SendGrid
 
-The SMTP settings page in the app stores configuration for the "From" address. The actual email sending is handled by MailChannels or Resend - you don't need a traditional SMTP server.
+1. Sign up for one of these services
+2. In your app → **Settings** → **Email Settings**:
+   - Select your provider
+   - Enter your API key
+   - Enter From address
+3. Click **Save**
 
-| Field | MailChannels | Resend |
-|-------|--------------|--------|
-| Host | Not needed | Not needed |
-| Port | Not needed | Not needed |
-| Username | Not needed | Not needed |
-| Password | Not needed | Not needed |
-| From Address | Required (your domain) | Set in Worker vars |
-| Encryption | Not needed | Not needed |
+### Option 3: MailChannels (Free, Advanced)
 
----
+MailChannels is free with Cloudflare Workers but requires DNS setup:
 
-## PlugNMeet Server Configuration
-
-After logging in as admin:
-
-1. Go to **Settings**
-2. Enter your PlugNMeet server details:
-   - **Server URL**: `https://demo.plugnmeet.com` (or your own)
-   - **API Key**: `plugnmeet`
-   - **API Secret**: `zumyyYWqv7KR2kUqvYdq4z4sXg7XTBD2ljT6`
-3. Click **Test** to verify
-4. Click **Save**
+1. Add DNS TXT records to your domain:
+   ```
+   @ TXT "v=spf1 include:relay.mailchannels.net ~all"
+   _mailchannels TXT "v=mc1 cfid=your-subdomain.workers.dev"
+   ```
+2. In app Settings, set From Address to an email on your domain
+3. Don't set any provider (MailChannels is the default)
 
 ---
 
 ## Understanding Join Links
 
-### How Join Links Work
+When you generate a join link, it contains:
+- The participant's name
+- Their role (moderator or participant)
+- A unique identifier
+- The meeting room ID
 
-When you generate a join link, the app:
-1. Calls PlugNMeet API `/room/getJoinToken`
-2. Gets a JWT token containing: user name, user ID, role, room ID
-3. Creates URL: `https://plugnmeet-server/?access_token=JWT_TOKEN`
+**Important:** Each link is for ONE person. If you share the same link with multiple people, they will all appear with the same name.
 
-### One Link = One Identity
+**Best practice:** Generate a separate link for each participant with their actual name.
 
-Each join link contains a **specific user identity**:
-- The name you entered when generating
-- Whether they're a moderator or participant
-- A unique user ID
+---
 
-**Important behaviors:**
+## Troubleshooting
 
-| Scenario | What Happens |
-|----------|--------------|
-| Same link, same browser | Rejoins as same user |
-| Same link, different browser | Creates duplicate user with same name |
-| Same link, used simultaneously | Both join as same identity (can cause issues) |
+### "Invalid credentials" error after updating worker
 
-### Best Practices
+**Why:** The password salt changed between deployments.
 
-1. **Generate unique links for each participant** - Enter their actual name
-2. **Don't share links publicly** - Anyone with the link can join
-3. **For large meetings** - Use the invite feature to email individual links
-4. **Links expire** - When the meeting ends or based on PlugNMeet server settings
+**Fix:**
+1. Go to **Cloudflare** → **KV** → **plugnmeet-data**
+2. Delete these keys:
+   - `users:list`
+   - `user:admin@example.com`
+3. Keep `system:salt` (don't delete!)
+4. Run: `curl -X POST https://your-worker.workers.dev/api/init`
+5. Login with `admin@example.com` / `admin123`
 
-### Example Flow
+### "Already initialized" error
 
-```
-1. Create meeting "Team Standup"
-2. Generate link for "Alice" (Moderator) → Send to Alice
-3. Generate link for "Bob" (Participant) → Send to Bob
-4. Generate link for "Charlie" (Participant) → Send to Charlie
-```
+The admin user already exists. Just login with your credentials.
 
-Each person gets their own personalized link with their name embedded.
+### Emails not sending
+
+1. Check your email provider is configured correctly
+2. Verify your domain is verified (for Resend)
+3. Check Cloudflare Worker logs for errors:
+   - Workers & Pages → Your worker → Logs → Begin log stream
+   - Try sending an email and watch for errors
+
+### Frontend shows "Local Mode"
+
+The `VITE_API_URL` environment variable isn't set:
+1. Cloudflare Pages → Your project → Settings → Environment variables
+2. Add `VITE_API_URL` with your worker URL
+3. Redeploy the frontend
+
+### CORS errors in browser console
+
+Set the `ALLOWED_ORIGIN` variable in your worker:
+1. Workers → Your worker → Settings → Variables
+2. Add: `ALLOWED_ORIGIN` = `https://your-project.pages.dev`
+
+### Worker not deploying from GitHub
+
+1. Check **GitHub** → **Actions** tab for errors
+2. Verify `CF_API_TOKEN` secret is set correctly
+3. Make sure changes are in the `worker/` directory
 
 ---
 
@@ -231,153 +283,178 @@ Each person gets their own personalized link with their name embedded.
 
 ```
 plugnmeet-manager-cloudflare/
+├── .github/
+│   └── workflows/
+│       └── deploy-worker.yml   # Auto-deploys worker on push
 ├── src/
-│   ├── App.jsx          # Main React application
-│   ├── main.jsx         # Entry point
-│   └── index.css        # Styles
+│   ├── App.jsx                 # Main React application
+│   ├── main.jsx                # Entry point
+│   └── index.css               # Tailwind CSS styles
 ├── worker/
-│   ├── worker.js        # Cloudflare Worker backend
-│   └── wrangler.toml    # Worker config (optional, for CLI)
+│   ├── worker.js               # Cloudflare Worker (API backend)
+│   ├── wrangler.toml           # Worker configuration
+│   └── .dev.vars.example       # Template for local secrets
 ├── public/
 │   └── favicon.svg
-├── .env.example         # Environment template
+├── .env.example                # Frontend env template
+├── .gitignore                  # Files not committed to Git
 ├── index.html
 ├── package.json
+├── vite.config.js
 └── README.md
 ```
 
 ---
 
-## Environment Variables
+## Configuration Files
 
-### Frontend (Cloudflare Pages)
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `VITE_API_URL` | Your Worker URL | Yes (for cloud mode) |
+### wrangler.toml (Worker Config)
 
-### Backend (Cloudflare Worker)
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `ALLOWED_ORIGIN` | Frontend URL for CORS | Recommended |
-| `RESEND_API_KEY` | Resend API key | Optional |
-| `EMAIL_FROM` | Sender email address | Optional |
+This file configures the Cloudflare Worker. It's committed to Git but **should never contain secrets**.
 
-### KV Bindings (Worker)
-| Binding | KV Namespace | Required |
-|---------|--------------|----------|
-| `DATA` | plugnmeet-data | Yes |
-| `SESSIONS` | plugnmeet-sessions | Yes |
+```toml
+name = "your-worker-name"
+main = "worker.js"
+account_id = "your-cloudflare-account-id"
+
+[[kv_namespaces]]
+binding = "DATA"
+id = "your-kv-namespace-id"
+```
+
+### Secrets (Never in Git!)
+
+Secrets are stored in **Cloudflare Dashboard** → **Worker** → **Settings** → **Variables**:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `RESEND_API_KEY` | Resend.com API key | `re_xxxxx...` |
+| `EMAIL_FROM` | Sender email address | `PlugNMeet <noreply@yourdomain.com>` |
+| `ALLOWED_ORIGIN` | Frontend URL (CORS) | `https://your-app.pages.dev` |
+
+### Local Development Secrets
+
+For local development, create `worker/.dev.vars` (gitignored):
+
+```
+RESEND_API_KEY=re_your_key_here
+EMAIL_FROM=Test <test@example.com>
+ALLOWED_ORIGIN=http://localhost:5173
+```
 
 ---
 
-## Troubleshooting
+## Local Development
 
-### "Invalid credentials" after setup
+```bash
+# Install dependencies
+npm install
 
-**Cause**: Password hash mismatch due to different salt values between worker versions.
+# Start frontend dev server
+npm run dev
 
-**Solution**:
-1. Go to **Cloudflare Dashboard** → **KV** → **plugnmeet-data**
-2. Delete these keys:
-   - `users:list`
-   - `user:admin@example.com`
-3. Reinitialize:
-   ```bash
-   curl -X POST https://YOUR_WORKER_URL/api/init
-   ```
-4. Login with `admin@example.com` / `admin123`
-
-> ⚠️ **Why this happens**: The worker uses a salt for password hashing. If you initialized the database with one version of the worker, then updated to a new version with a different salt, the password hashes won't match. Always reinitialize after updating the worker code.
-
-### "Already initialized" error
-
-The admin user already exists. Either:
-- Login with `admin@example.com` / `admin123`
-- Or clear KV data and reinitialize (see above)
-
-### "Unauthorized" error
-
-- Check KV bindings are set (Step 4)
-- Run `/api/init` to create admin user (Step 5)
-- Clear browser cache/cookies and try again
-
-### Worker returns error
-
-- Verify both `DATA` and `SESSIONS` bindings exist in Worker settings
-- Check Worker logs: Worker → **Logs** → **Begin log stream**
-
-### Emails not sending
-
-**For MailChannels:**
-- Add SPF record to your domain DNS
-- Use a From address on your domain
-- Check Worker logs for errors
-
-**For Resend:**
-- Verify `RESEND_API_KEY` is set in Worker variables
-- Check Resend dashboard for delivery status
-
-### Frontend shows "Local Mode"
-
-- Set `VITE_API_URL` environment variable in Cloudflare Pages
-- Trigger a new deployment after setting the variable
-
-### CORS errors
-
-Set `ALLOWED_ORIGIN` variable in Worker to your Pages URL:
-```
-ALLOWED_ORIGIN=https://your-project.pages.dev
+# In another terminal, start worker
+cd worker
+npx wrangler dev
 ```
 
-### Join links not working
-
-- Verify PlugNMeet server is configured in Settings
-- Test the server connection with the "Test" button
-- Check that the meeting exists and is active on the PlugNMeet server
+The frontend runs at `http://localhost:5173` and the worker at `http://localhost:8787`.
 
 ---
 
-## Security Considerations
+## API Reference
 
-### Passwords
-- Hashed with SHA-256 + salt
-- Salt is hardcoded in worker (change for production)
-- Consider bcrypt for higher security
+### Public Endpoints
 
-### API Secrets
-- Stored in Cloudflare KV (encrypted at rest)
-- Masked in API responses
-- Never exposed to frontend
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/health` | Health check |
+| POST | `/api/auth/login` | Login |
+| POST | `/api/auth/register` | Register new user |
+| POST | `/api/init` | Initialize database (first run only) |
 
-### Sessions
-- 7-day expiration
-- Stored in separate KV namespace
-- Invalidated on logout
+### Authenticated Endpoints
 
-### Recommendations for Production
-1. Change default admin password immediately
-2. Set `ALLOWED_ORIGIN` to restrict CORS
-3. Use cloud mode (not local mode)
-4. Enable Cloudflare Access for additional protection
-5. Use a custom domain with SSL
-6. Change the password salt in worker.js
+Include header: `Authorization: Bearer YOUR_TOKEN`
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/auth/change-password` | Change password |
+| GET | `/api/meetings` | List meetings |
+| POST | `/api/meetings` | Create meeting |
+| DELETE | `/api/meetings/:id` | Delete meeting |
+| GET | `/api/invites` | List invites |
+| POST | `/api/invites` | Create invite |
+| DELETE | `/api/invites/:id` | Delete invite |
+| POST | `/api/email/invite` | Send invite email |
+| POST | `/api/plugnmeet/*` | Proxy to PlugNMeet server |
+
+### Admin Only Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/users` | List users |
+| POST | `/api/users` | Create user |
+| DELETE | `/api/users/:id` | Delete user |
+| GET | `/api/config` | Get config |
+| POST | `/api/config/server` | Save PlugNMeet config |
+| POST | `/api/config/email` | Save email config |
 
 ---
 
 ## Cost
 
+Everything runs on free tiers:
+
 | Service | Free Tier |
 |---------|-----------|
-| Cloudflare Pages | Unlimited |
+| Cloudflare Pages | Unlimited sites, 500 builds/month |
 | Cloudflare Workers | 100,000 requests/day |
-| Cloudflare KV | 100,000 reads/day |
-| MailChannels | Unlimited with Workers |
+| Cloudflare KV | 100,000 reads/day, 1,000 writes/day |
 | Resend | 3,000 emails/month |
+| SMTP2GO | 1,000 emails/month |
 
-**Total: $0/month** for typical usage
+**Total cost: $0/month** for typical usage.
+
+---
+
+## Security
+
+- **Passwords** - Hashed with SHA-256 + salt (stored in KV)
+- **API Secrets** - Stored in KV, never exposed to browser
+- **Sessions** - JWT-like tokens, expire after 7 days
+- **CORS** - Configurable via `ALLOWED_ORIGIN`
+- **PlugNMeet API** - Proxied through worker (credentials never in browser)
+
+### Security Best Practices
+
+1. ✅ Change the default admin password immediately
+2. ✅ Set `ALLOWED_ORIGIN` to your frontend domain
+3. ✅ Use HTTPS (automatic with Cloudflare)
+4. ✅ Keep secrets in Cloudflare Dashboard, not in code
+5. ✅ Never delete `system:salt` from KV
+
+---
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
 
 ---
 
 ## License
 
-MIT
+MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+## Support
+
+- **Issues**: [GitHub Issues](https://github.com/ifedan-ed/plugnmeet-manager-cloudflare/issues)
+- **PlugNMeet Docs**: [plugnmeet.org](https://www.plugnmeet.org/)
+- **Cloudflare Workers**: [developers.cloudflare.com](https://developers.cloudflare.com/workers/)
